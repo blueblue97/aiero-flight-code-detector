@@ -1,11 +1,10 @@
-
 import streamlit as st
 from opensky_api import OpenSkyApi
 from geopy.distance import geodesic
 import folium
 from streamlit_folium import st_folium
 
-# Use credentials from Streamlit secrets
+# OpenSky login from secrets
 api = OpenSkyApi(
     username=st.secrets["opensky_username"],
     password=st.secrets["opensky_password"]
