@@ -1,76 +1,57 @@
 import streamlit as st
-from opensky_api import OpenSkyApi
-from geopy.distance import geodesic
+import pandas as pd
+import matplotlib.pyplot as plt
 import folium
+from folium.plugins import AntPath
+from io import BytesIO
 from streamlit_folium import st_folium
 
-# OpenSky login from secrets
-api = OpenSkyApi(
-    username=st.secrets["opensky_username"],
-    password=st.secrets["opensky_password"]
-)
+st.set_page_config(page_title="AIero Conflict Detector", layout="wide")
+st.title("✈️ AIero Conflict Detector")
 
-st.title("🛫 Flight Conflict Detector by Flight Number")
+uploaded_file = st.file_uploader("Upload a CSV with flight data", type=["csv"])
 
-flight_number = st.text_input("Enter Flight Number (e.g., TP344)")
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
 
-if flight_number:
-    st.write(f"Searching for flight: **{flight_number.upper()}**")
-
-    states = api.get_states()
-
-    target = None
-    for s in states.states:
-        if s.callsign and flight_number.upper() in s.callsign.strip():
-            target = s
-            break
-
-    if target:
-        st.success(f"Found flight {target.callsign.strip()}")
-
-        lat, lon = target.latitude, target.longitude
-        alt = target.baro_altitude
-
-        st.write(f"Location: ({lat}, {lon}) at {alt} m")
-
-        m = folium.Map(location=[lat, lon], zoom_start=6)
-        folium.Marker([lat, lon], tooltip=f"{target.callsign.strip()} (Target)", icon=folium.Icon(color='red')).add_to(m)
-
-        conflict_flights = []
-        for s in states.states:
-            if s != target and s.latitude and s.longitude:
-                dist = geodesic((lat, lon), (s.latitude, s.longitude)).km
-                alt_diff = abs((s.baro_altitude or 0) - (alt or 0))
-
-                risk = None
-                color = "green"
-
-                if dist < 10 and alt_diff < 300:
-                    risk = "⚠️ High"
-                    color = "red"
-                elif dist < 50 and alt_diff < 600:
-                    risk = "⚠ Medium"
-                    color = "orange"
-                elif dist < 100 and alt_diff < 1000:
-                    risk = "Low"
-                    color = "yellow"
-
-                if risk:
-                    conflict_flights.append((s, dist, alt_diff, risk))
-                    folium.Marker(
-                        [s.latitude, s.longitude],
-                        tooltip=f"{s.callsign.strip()} | {risk} | {dist:.1f}km | Alt Δ: {alt_diff:.0f}m",
-                        icon=folium.Icon(color=color)
-                    ).add_to(m)
-
-        st_folium(m, width=700)
-
-        st.subheader("🛑 Conflict Risk Summary")
-        if conflict_flights:
-            for c, d, a, r in conflict_flights:
-                st.markdown(f"- `{c.callsign.strip()}` | **{r}** | Distance: {d:.1f} km | Altitude Diff: {a:.0f} m")
-        else:
-            st.success("No conflicts detected.")
-
+    # Check required columns
+    required = {'flight_id', 'lat', 'lon', 'altitude', 'timestamp'}
+    if not required.issubset(df.columns):
+        st.error(f"Missing columns. Required: {required}")
     else:
-        st.error("Flight not found.")
+        # Convert timestamp
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+        st.subheader("📊 Uploaded Flight Data")
+        st.dataframe(df)
+
+        # Plot 1: Flight Paths
+        st.subheader("🛫 Flight Paths (Longitude vs Latitude)")
+        fig1, ax1 = plt.subplots()
+        for flight_id, group in df.groupby('flight_id'):
+            ax1.plot(group['lon'], group['lat'], marker='o', label=flight_id)
+        ax1.set_xlabel('Longitude')
+        ax1.set_ylabel('Latitude')
+        ax1.legend()
+        st.pyplot(fig1)
+
+        # Plot 2: Altitude over Time
+        st.subheader("📈 Altitude Over Time")
+        fig2, ax2 = plt.subplots()
+        for flight_id, group in df.groupby('flight_id'):
+            ax2.plot(group['timestamp'], group['altitude'], marker='x', label=flight_id)
+        ax2.set_xlabel('Timestamp')
+        ax2.set_ylabel('Altitude')
+        ax2.tick_params(axis='x', rotation=45)
+        ax2.legend()
+        st.pyplot(fig2)
+
+        # Plot 3: Interactive World Map
+        st.subheader("🌍 World Map of Flight Paths")
+        world_map = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=3)
+        colors = ['red', 'blue', 'green', 'purple', 'orange']
+        for i, (flight_id, group) in enumerate(df.groupby('flight_id')):
+            coords = list(zip(group['lat'], group['lon']))
+            folium.PolyLine(coords, color=colors[i % len(colors)], weight=3, opacity=0.8, tooltip=flight_id).add_to(world_map)
+
+        st_folium(world_map, width=800, height=500)
